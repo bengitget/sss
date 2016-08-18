@@ -9,7 +9,12 @@ import numpy as np
 from datetime import datetime, timedelta
 import datetime as dt
 
-def update_release_dates(df, transformation, bdays=1, early_release=False):
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import datetime as dt
+
+def update_release_dates(df, transformation, bdays=1):
     
     def compute_bdays(x):
         if pd.isnull(x['ECO_RELEASE_DT']):
@@ -27,59 +32,72 @@ def update_release_dates(df, transformation, bdays=1, early_release=False):
                                  freq='B').size
        
     
-    def apply_bday_offset(x):
-        if early_release:
-            return x['Date'] - x['bdays'] * pd.tseries.offsets.BDay()
-        else:
-            return x['Date'] + x['bdays'] * pd.tseries.offsets.BDay()
-    
-    
+#    
     # change the format of the two dates to datetime ; drop all values of NaN in Actual_release 
-    n=len(df)
-    df['Date']=pd.to_datetime(df['Date'])
+    df1=df.dropna(subset=['PX_LAST'])
+    df1['Date']=pd.to_datetime(df1['Date'])
+    
     df1 = df.dropna(how='all',subset= ['ECO_RELEASE_DT'])
-    df2 = df[:n-len(df1)-2]
+    num=len(df)
     df1.ECO_RELEASE_DT=df1.ECO_RELEASE_DT.astype(int)
+    
     df1.ECO_RELEASE_DT=df1.ECO_RELEASE_DT.astype(str)
     df1['ECO_RELEASE_DT']=pd.to_datetime(df1['ECO_RELEASE_DT'])
-    df['RDate']=0
+    
     if df['ECO_RELEASE_DT'].isnull().all():
         print('No release dates found. Applying %d b-day increment to reference date to compute release dates' % bdays)
         df['bdays'] = bdays
         df['RDate']=df['Date'] + bdays* pd.tseries.offsets.BDay()
+        m=bdays
     else:
         # ffill and bfill the b-day difference
         df1['bdays'] = df1.apply(compute_bdays,axis=1)
-        df1['RELEASE_DT'] = df1.apply(apply_bday_offset, axis=1)
         m=int(df1['bdays'].mean())
-  
-#        df['bdays'] = df['bdays'].ffill()
-#        df['bdays'] = df['bdays'].bfill()
-        l=tuple(df1.index)
+        df['RRDate']= df1['ECO_RELEASE_DT']
+        df['RRRDate']=df['Date'] + m * pd.tseries.offsets.BDay()
+        df['RDate'] = df['RRDate'].combine_first(df['RRRDate'])
         
-        for i in range(0,n):
-            if i in l:
-            
-                df['RDate'][i]= df1['RELEASE_DT'][i]
-            else:
-             
-                df['RDate'][i]=df['Date'][i] + m * pd.tseries.offsets.BDay()
- 
+    g=pd.DataFrame(df['RDate']).duplicated() 
+#    for i in range(2,num+1):
+#       if g[i]==True:
+    f=g[g==True].index
+    df = df.drop((df.index[f-2]))
+    df = df.dropna(how='all',subset= ['PX_LAST','ACTUAL_RELEASE'])
     # combine the actual release and px_last with the index being the update release date
     df = df[['PX_LAST','ACTUAL_RELEASE']].dropna(how='all').set_index(df['RDate'])
     df['PX_BLENDED'] = df['ACTUAL_RELEASE'].combine_first(df['PX_LAST'])
     df.dropna(how='all')
    
-    g=pd.DataFrame(df.index).duplicated() 
-    for i in range(1,n):
-       if g[i]==True:
-           tt = df[df[~i]]
            
     if transformation=="Diff1M":
         df['Diff1M']=pd.DataFrame(df['PX_BLENDED'].diff()) 
+    elif transformation=="Ndiff1M":
+        df['Diff1M']=pd.DataFrame(df['PX_BLENDED'].diff()*(-1))
+    elif transformation=="Level":
+        df['Diff1M']=df['PX_BLENDED']
+    elif transformation=="NLevel":
+        df['Diff1M']=df['PX_BLENDED']*(-1)
+    elif transformation == "log":
+       log_n= np.log(df['PX_BLENDED'].astype('float64'))
+       df['Diff1M']=pd.DataFrame(log_n).diff()
+    elif transformation =="rolling12M":
+       df['Diff1M']=pd.rolling_sum(pd.DataFrame(df['PX_BLENDED']),12).diff()
+    elif transformation == 'logsign':
+        
+        tem=[]
+        for i in range(0,len(df['PX_BLENDED'])):
+          
+            if df['PX_BLENDED'][i] > 0:
+                tem.append(df['PX_BLENDED'][i]*10)
+                i=i+1
+            else:
+                tem.append(-df['PX_BLENDED'][i]*10)
+                i=i+1
+        tem=pd.DataFrame(tem, index=df.index)
+        log_n=np.log(tem)
+        df['Diff1M']=pd.DataFrame(log_n).diff()
     else:
         df['Diff1M']=0
-  
-         
-    return df
+       
 
+    return df,m
